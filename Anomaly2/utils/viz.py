@@ -45,13 +45,13 @@ def plot_moe_tsne(emb, path, n_normal=1500, seed=0, title=''):
         mk = a_mask & (asg == k)
         ax[0].scatter(*Zi[mk].T, c=[cols[k]], s=26, marker='x', label=f'anomaly -> expert {k} (n={int(mk.sum())})')
         ax[0].scatter(*Zp[k], c=[cols[k]], s=260, marker='*', edgecolors='k')
-    ax[0].legend(fontsize=7); ax[0].set_title('residual space, coloured by routed expert (* = expert prototype)')
+    ax[0].legend(fontsize=7); ax[0].set_title('residual space, coloured by routed expert (* = prototype)', fontsize=9)
     for t, mk_ in ((0, 'o'), (1, '^')):
         for k in range(K):
             sel = (asg[a_mask] == k) & (proxy == t)
             ax[1].scatter(*Zi[a_mask][sel].T, c=[cols[k]], marker=mk_, s=28, edgecolors='k', linewidths=.3)
-    ax[1].set_title('anomalies only: colour = expert, marker = PROXY type (o low-degree, ^ high-degree)')
-    fig.suptitle(title); fig.tight_layout(); fig.savefig(path, dpi=140); plt.close(fig)
+    ax[1].set_title('anomalies: colour = expert, marker = PROXY type (o low / ^ high degree)', fontsize=9)
+    fig.suptitle(title, fontsize=11); fig.tight_layout(); fig.savefig(path, dpi=140); plt.close(fig)
     a_asg = emb['assign'][an]
     stats = dict(usage=np.bincount(a_asg, minlength=K).tolist(),
                  silhouette=float(silhouette_score(emb['res'][an], a_asg)) if len(set(a_asg)) > 1 else float('nan'))

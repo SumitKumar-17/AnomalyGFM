@@ -5,15 +5,15 @@
 | 1-hop (paper)                        | 0.834±0.022 | 0.475±0.121 |
 | 2-hop                                | 0.819±0.048 | 0.418±0.192 |
 | PPR (alpha=0.3, K=4)                 | 0.815±0.065 | 0.404±0.220 |
-| Adaptive PPR (learned per-node hops) | 0.814±0.067 | 0.396±0.223 |
+| Adaptive PPR (learned per-node hops) | 0.834±0.020 | 0.491±0.107 |
 
 ### amazon_upu (5 seeds)
 | residual                             | AUROC       | AUPRC       |
 |:-------------------------------------|:------------|:------------|
 | 1-hop (paper)                        | 0.792±0.017 | 0.387±0.099 |
 | 2-hop                                | 0.792±0.029 | 0.362±0.149 |
-| PPR (alpha=0.3, K=4)                 | 0.789±0.036 | 0.342±0.162 |
-| Adaptive PPR (learned per-node hops) | 0.788±0.038 | 0.342±0.164 |
+| PPR (alpha=0.3, K=4)                 | 0.790±0.036 | 0.342±0.162 |
+| Adaptive PPR (learned per-node hops) | 0.795±0.015 | 0.399±0.089 |
 
 ### reddit (5 seeds)
 | residual                             | AUROC       | AUPRC       |
@@ -21,15 +21,15 @@
 | 1-hop (paper)                        | 0.573±0.020 | 0.037±0.001 |
 | 2-hop                                | 0.531±0.019 | 0.034±0.001 |
 | PPR (alpha=0.3, K=4)                 | 0.534±0.020 | 0.034±0.001 |
-| Adaptive PPR (learned per-node hops) | 0.535±0.020 | 0.034±0.001 |
+| Adaptive PPR (learned per-node hops) | 0.558±0.027 | 0.036±0.002 |
 
 ### elliptic (5 seeds)
 | residual                             | AUROC       | AUPRC       |
 |:-------------------------------------|:------------|:------------|
 | 1-hop (paper)                        | 0.394±0.007 | 0.076±0.001 |
 | 2-hop                                | 0.380±0.005 | 0.074±0.001 |
-| PPR (alpha=0.3, K=4)                 | 0.372±0.009 | 0.073±0.001 |
-| Adaptive PPR (learned per-node hops) | 0.372±0.007 | 0.073±0.001 |
+| PPR (alpha=0.3, K=4)                 | 0.372±0.008 | 0.073±0.001 |
+| Adaptive PPR (learned per-node hops) | 0.395±0.012 | 0.075±0.002 |
 
 ### tolokers (5 seeds)
 | residual                             | AUROC       | AUPRC       |
@@ -37,7 +37,7 @@
 | 1-hop (paper)                        | 0.538±0.047 | 0.272±0.029 |
 | 2-hop                                | 0.544±0.036 | 0.275±0.023 |
 | PPR (alpha=0.3, K=4)                 | 0.540±0.033 | 0.271±0.021 |
-| Adaptive PPR (learned per-node hops) | 0.540±0.033 | 0.271±0.021 |
+| Adaptive PPR (learned per-node hops) | 0.532±0.045 | 0.268±0.029 |
 
 ### AVERAGE (5 seeds)
 | residual                             | AUROC       | AUPRC       |
@@ -45,4 +45,4 @@
 | 1-hop (paper)                        | 0.626±0.011 | 0.249±0.036 |
 | 2-hop                                | 0.613±0.012 | 0.233±0.061 |
 | PPR (alpha=0.3, K=4)                 | 0.610±0.016 | 0.225±0.070 |
-| Adaptive PPR (learned per-node hops) | 0.610±0.019 | 0.223±0.071 |
+| Adaptive PPR (learned per-node hops) | 0.623±0.013 | 0.254±0.031 |

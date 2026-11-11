@@ -1,5 +1,7 @@
 # WORK.md - everything we did, why we did it, and what happened
 
+> **Second study:** a separate direction (MoE prototypes, unsupervised test-time adaptation, edge purification, adaptive PPR residuals) lives in [`Anomaly2/`](Anomaly2/WORK.md) on this same branch.
+
 Project: term project on **AnomalyGFM** (Qiao, Niu, Chen, Pang - *Graph Foundation Model for Zero/Few-shot Anomaly
 Detection*, KDD'25, arXiv 2502.09254). Fork: `SumitKumar-17/AnomalyGFM`, branch `team-contributions`.
 All experiments ran on the lab server (RTX 4500 Ada **24 GB** - not 40 GB, 32 CPU cores, 62 GB RAM, PyTorch 2.5.1+cu121);
