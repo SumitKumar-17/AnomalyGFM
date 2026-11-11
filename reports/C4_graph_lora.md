@@ -87,3 +87,18 @@ fine-tuning - dominated by the resident graph and a copy of the model, not by th
 ```
 python evaluate_team_contributions.py --seeds 0 1 2 3 4 --targets amazon amazon_upu reddit   # rows "C4 Graph-LoRA" and "[sens.]"
 ```
+
+## 8. Multi-source baseline underneath (4 sources; 3 seeds; k = 100 normal nodes)
+
+| Method | Params | Amazon | Amazon-UPU | Reddit |
+|---|---|---|---|---|
+| 4-src zero-shot (= prompt / LoRA at paper budget) | 80 / 4,832 | 0.610 | 0.612 | 0.590 |
+| [sens.] prompt, 30 ep lr 1e-3 | 80 | 0.576 | 0.593 | 0.582 |
+| [sens.] full fine-tune | 164,002 | 0.449 | 0.485 | 0.608 |
+| [sens.] **Graph-LoRA** | 4,832 | 0.448 | **0.527** | **0.608 ± .007** |
+
+The pattern from Section 4 repeats on a different frozen baseline: at the paper's budget every method is a no-op; at the
+larger budget weight-level adaptation (LoRA, full) *hurts* on Amazon (about 0.45 vs 0.61) and helps slightly on Reddit
+(0.608 vs 0.590, with LoRA the most stable: std 0.007). On Amazon-UPU LoRA loses less than full fine-tuning (0.527 vs 0.485)
+but more than the prompt (0.593). So the conclusions are unchanged: LoRA is parameter-efficient (4,832 vs 164,002), does not
+improve accuracy, and the normal-only objective is the bottleneck.

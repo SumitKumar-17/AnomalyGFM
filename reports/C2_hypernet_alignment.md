@@ -79,3 +79,21 @@ As in C1 (train Facebook, 5 seeds, zero-shot on Amazon / Amazon-UPU / Reddit, sa
 ```
 python evaluate_team_contributions.py --seeds 0 1 2 3 4 --targets amazon amazon_upu reddit   # rows "+ C2 Hypernet alignment"
 ```
+
+## 9. Multi-source pre-training: the direct test of the explanation (4 sources, target held out; 3 seeds)
+
+| Target | 1-src C2 | 4-src baseline | **4-src + C2** |
+|---|---|---|---|
+| Amazon | 0.360 ± .031 | 0.611 ± .089 | **0.620 ± .012** |
+| Amazon-UPU | 0.363 ± .022 | 0.612 ± .070 | **0.617 ± .018** |
+| Reddit | 0.573 ± .058 | 0.591 ± .018 | 0.467 ± .004 |
+
+* **The inversion disappears.** With four training graphs (four different metadata vectors) C2 goes from 0.36 to 0.62 on
+  Amazon and from 0.36 to 0.62 on Amazon-UPU, and its variance collapses (±0.012). This is consistent with - and the only
+  evidence for - the claim that a single training graph cannot teach a hypernetwork how to adapt to metadata.
+* **But it is not a win.** It only matches the 4-source baseline (0.620 vs 0.611), which itself is far below the
+  single-source baseline (0.832). And on **Reddit, C2 gets worse with more sources** (0.573 -> 0.467, below chance), so the
+  gain is not general.
+* Reading: more metadata diversity removes the *catastrophic* failure of C2, but we have not shown that learned alignment
+  beats SVD. Four metadata points are still very few for learning a metadata -> weights map; the pool also contains
+  graphs whose raw features (10-32 dims) are small and heterogeneous.

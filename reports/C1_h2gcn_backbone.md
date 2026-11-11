@@ -88,3 +88,16 @@ Cost: parameters 484,402 -> 810,802; peak GPU memory 508 -> 532 MB (Amazon), 139
 ```
 python evaluate_team_contributions.py --seeds 0 1 2 3 4 --targets amazon amazon_upu reddit   # rows "+ C1 H2GCN backbone"
 ```
+
+## 9. Multi-source pre-training (4 sources, target domain held out; 3 seeds)
+
+| Target | 1-src baseline | 4-src baseline | **4-src + C1** |
+|---|---|---|---|
+| Amazon | 0.832 ± .029 | 0.611 ± .089 | 0.548 ± .116 |
+| Amazon-UPU | 0.785 ± .020 | 0.612 ± .070 | 0.548 ± .066 |
+| Reddit | 0.572 ± .032 | 0.591 ± .018 | 0.590 ± .014 |
+
+C1 does **not** become better with more source graphs: it stays below the baseline on both Amazon graphs and ties it on
+Reddit (0.590 vs 0.591). Both methods lose accuracy under naive pooling (see `WORK.md` Section 7 for the untested
+explanations), so the over-fitting-to-Facebook explanation in Section 6 is at best *part* of the story: if it were the
+whole story, more sources should have helped C1 more than the baseline. They did not.

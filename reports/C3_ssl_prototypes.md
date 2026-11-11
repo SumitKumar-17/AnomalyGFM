@@ -83,3 +83,19 @@ and in-domain "FB-val" check as C1. For FB-val, the labels are used only to *eva
 ```
 python evaluate_team_contributions.py --seeds 0 1 2 3 4 --targets amazon amazon_upu reddit   # rows "+ C3 SSL prototypes (NO labels)"
 ```
+
+## 9. Multi-source pre-training: SSL can use unlabelled graphs (4 sources; 3 seeds)
+
+| Target | 1-src SSL | 4-src baseline (sup.) | **4-src SSL (no labels)** |
+|---|---|---|---|
+| Amazon | 0.591 ± .102 | 0.611 ± .089 | 0.573 ± .122 |
+| Amazon-UPU | 0.571 ± .070 | 0.612 ± .070 | 0.576 ± .086 |
+| Reddit | 0.582 ± .013 | 0.591 ± .018 | **0.610 ± .035** |
+
+* On **Reddit, label-free multi-source SSL is the best method in the whole study** (0.610), above the supervised 4-source
+  baseline (0.591) and the single-source baseline (0.572). The margin is small relative to the seed noise (3 seeds), so
+  we call it *suggestive*.
+* On Amazon / Amazon-UPU it is on par with the supervised 4-source baseline within the (large) noise, and below the
+  single-source supervised baseline (0.83 / 0.79).
+* C3 is the only contribution that never collapses below the baseline's noise band in any configuration, and it needs no
+  labels; the cost is that multi-source SSL needs about 2 GB of incremental GPU memory (view caching + dense augmentation).

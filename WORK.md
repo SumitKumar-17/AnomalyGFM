@@ -21,8 +21,9 @@ the code lives locally and is synchronised with `sync.sh` (rsync push; results p
   3. **The released few-shot code does no real tuning** (the prompt is commented out of `forward`).
 * Earlier benchmark (Exp H/I) found: the paper's *normal*-prototype score is inverted (AUROC 0.40, worse than chance);
   the two prototypes are nearly collinear; the paper's row-sum feature normalisation is numerically unsafe.
-* A **multi-source pre-training** experiment (Section 7) tests whether the failures come from training on a single
-  1,081-node graph.
+* A **multi-source pre-training** experiment (Section 7) tested whether the failures come from training on a single
+  1,081-node graph. **Result: naive multi-source pooling did not fix it - it made the supervised baseline worse on
+  Amazon (0.83 -> 0.61)** - but it removed C2's inversion (0.36 -> 0.62) and C3 is best on Reddit (0.61, within noise).
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -200,3 +201,124 @@ GPU memory (peak, MB): baseline 508 / 139 / 137 (Amazon / UPU / Reddit); +C1 532
 3. All rows are evaluated on the **same node set** (target minus the 100 tuned normals).
 4. The in-domain FB-val column was added to prove the modules are not simply buggy.
 
+
+---------------------------------------------------------------------------------------------------------------------
+
+## 7. Phase 4 - multi-source pre-training (does more training data fix transfer?)
+
+**Why:** every extension learned in-domain but transferred badly from one 1,081-node graph. A hypernetwork conditioned on
+dataset metadata (C2) cannot learn *how* to change with the metadata from a single metadata point, and a label-free
+method (C3) can use any unlabelled graph. So the natural test was to pre-train on several graphs.
+
+**Design (`evaluate_team_contributions.py --multisource`):**
+* Source pool = Facebook, Reddit, Amazon, YelpChi, T-Finance **minus the target's domain** (the target domain is never
+  seen: Amazon and Amazon-UPU both exclude Amazon; Reddit excludes Reddit) -> 4 sources per target.
+* Large sources are represented by 12 pre-sampled **BFS subgraphs of at most 4,000 nodes** (SSL augmentation is dense);
+  each epoch uses one random view of each source and a single optimiser step on the mean per-source loss.
+* Supervised loss uses 30% labelled nodes per view (source labels only; the target is never used); SSL uses no labels.
+* YelpChi/T-Finance 8-dim features come from our own SVD (the paper's recipe), Facebook/Reddit/Amazon from the authors' files.
+* Same 301 epochs, lr 1e-4; same evaluation protocol as Section 6; **3 seeds** (about 5 minutes per seed per target on the GPU).
+* The single-source Facebook rows were re-run inside the same job as a control: 0.832 / 0.785 / 0.572 (Amazon / UPU / Reddit)
+  vs 0.834 / 0.792 / 0.564 in Section 6 - the pipeline reproduces itself.
+
+**Results (AUROC mean ± std, 3 seeds; full tables in `results/ms/multisource.md`):**
+
+| Method | Amazon | Amazon-UPU | Reddit |
+|---|---|---|---|
+| 1-source (Facebook) baseline | **0.832 ± .029** | **0.785 ± .020** | 0.572 ± .032 |
+| 4-source baseline | 0.611 ± .089 | 0.612 ± .070 | 0.591 ± .018 |
+| 4-source + C1 H2GCN | 0.548 ± .116 | 0.548 ± .066 | 0.590 ± .014 |
+| 4-source + C2 Hypernet | 0.620 ± .012 | 0.617 ± .018 | 0.467 ± .004 |
+| 4-source + C3 SSL (no labels) | 0.573 ± .122 | 0.576 ± .086 | **0.610 ± .035** |
+| 4-source C1+C2+C3 | 0.530 ± .012 | 0.508 ± .025 | 0.476 ± .081 |
+
+| Adaptation on the 4-source baseline | Trainable | Amazon | Amazon-UPU | Reddit |
+|---|---|---|---|---|
+| prompt / LoRA / (paper protocol) | 80 / 4,832 | 0.610 / 0.610 | 0.612 / 0.612 | 0.590 / 0.590 |
+| [sens.] prompt, 30 ep lr 1e-3 | 80 | 0.576 | 0.593 | 0.582 |
+| [sens.] full fine-tune | 164,002 | 0.449 | 0.485 | 0.608 |
+| [sens.] **LoRA** | 4,832 | 0.448 | 0.527 | **0.608 ± .007** |
+
+**What happened, honestly:**
+1. **Naive pooling hurt the supervised baseline on both Amazon graphs** (-0.22 and -0.17 AUROC); on Reddit it is +0.019
+   (inside the noise). More data did not help; it is a *negative transfer* result.
+2. **C2's inversion disappeared** (0.36 -> 0.62 on Amazon; 0.36 -> 0.62 on UPU) once the hypernetwork saw four different
+   metadata points. This is the one result that supports our single-metadata-point explanation. But it only *matches* the
+   (degraded) 4-source baseline, and on Reddit C2 got worse (0.57 -> 0.47), so the picture is mixed.
+3. **C3 is the best method on Reddit** (0.610; vs 0.572 for the 1-source baseline = +0.038, about 1.2 of that baseline's
+   std - suggestive only with 3 seeds).
+4. **Adaptation behaves as before:** no-ops at the paper's budget; at the larger budget LoRA and full fine-tuning hurt on
+   Amazon (about 0.45) and are slightly positive on Reddit; the 80-parameter prompt is the safest.
+
+**Why might pooling hurt? (all untested hypotheses):** (a) anomaly semantics differ across sources (spam reviews vs fraud
+accounts vs Facebook accounts), so averaging supervised prototype alignment across them blurs the prototypes; (b) BFS-sampled
+4,000-node subgraphs have different degree/neighbourhood statistics than the full target graph, so the *residuals* seen in
+training differ from those at test time; (c) the SVD we computed for YelpChi/T-Finance may use different sign/scale
+conventions than the authors' files, and the paper's row-sum normalisation is numerically unstable (Section 5); (d) all
+sources are weighted equally although they differ in size and quality. These are confounds of *our* implementation, so this
+result should be read as "naive multi-source pooling with our sampling does not help", not "multi-source pre-training cannot help".
+
+## 8. Mistakes, bugs and corrections (an honest log)
+
+| What went wrong | How we caught it | Fix |
+|---|---|---|
+| `G['X8'][0]` took one row instead of the matrix (IndexError) | first smoke test crashed | removed the stray index |
+| Hypernet feature-range descriptor used `X.min(0).min()` (a scalar) | code review while writing the next file | per-feature `X.min(0).values` |
+| Prompt baseline looked 0.09 AUROC worse | in-domain/fairness check | identity initialisation of the prompt |
+| First adaptation budget (30 ep, lr 1e-3) was chosen without basis | self-review | paper protocol is now the main result; larger budget is a labelled sensitivity check |
+| `rsync --delete` removed the `zero_shot/data` symlink | run failed with FileNotFound | exclude `data` in `sync.sh` and re-link |
+| Monitor `pgrep -f` matched itself, never reported | job had finished long before | `bg`/`wait` with a `.done` marker file |
+| `bg` mode held the SSH session open | tool call timed out | `setsid nohup ... < /dev/null` |
+| `RuntimeWarning: divide by zero in power` in logs | user noticed | benign (isolated nodes; next line zeroes the infs); now wrapped in `np.errstate` |
+| Network to the server dropped twice mid-run | `No route to host` | jobs run detached on the server and survived; we reconnected and read the results |
+| Assumed a 40 GB GPU | `nvidia-smi` | actual RTX 4500 Ada is 24 GB |
+
+## 9. What we can and cannot claim
+
+**Can claim (measured):** the baseline reproduces; no re-scoring/re-normalisation beats the paper (Exp H/I); the normal
+prototype score is inverted on 7 of 9 graphs; C1/C2 hurt transfer to Amazon from a single training graph; C3 reaches 0.62
+AUROC on Amazon with no labels; LoRA uses 2.9% of full fine-tuning's parameters at equal accuracy under the paper's
+protocol; naive multi-source pooling hurt the baseline on Amazon; the released few-shot code leaves its prompt disabled.
+
+**Cannot claim:** that any extension *improves* accuracy over the baseline; any statement about *why* things fail beyond
+the labelled hypotheses; results beyond 3 target graphs, one training protocol, 5 (single-source) / 3 (multi-source)
+seeds; generality to other datasets (Elliptic, T-Finance, Yelp as *targets* were only used in Exp H/I with SVD features).
+
+## 10. How to reproduce
+
+```
+# data: data/datasets for AnomalyGFM/*_svd.mat  (Google Drive link in the repo README)
+#       data/raw/{Facebook,Amazon,Amazon-all,Reddit,YelpChi,t_finance}.mat  (UNPrompt Drive folder)
+python zero_shot/bench.py --exp both --seeds 0 1 2 3 4 && python zero_shot/summarize.py      # Exp H + I
+python evaluate_team_contributions.py --seeds 0 1 2 3 4 --targets amazon amazon_upu reddit  # Section 6
+python evaluate_team_contributions.py --multisource --seeds 0 1 2 --targets amazon amazon_upu reddit --out results/ms   # Section 7
+python zero_shot/explain.py --dataset_test amazon_svd                                       # explanation prototype
+```
+Remote workflow: `./sync.sh push`, `./sync.sh bg <name> "<cmd>"`, `./sync.sh wait <name>`, `./sync.sh pull`.
+
+## 11. File map
+
+| Path | What |
+|---|---|
+| `models/h2gcn_backbone.py` | C1 |
+| `models/hypernet_alignment.py` | C2 |
+| `utils/ssl_pretrain.py` | C3 |
+| `models/graph_lora.py` | C4 |
+| `evaluate_team_contributions.py` | unified evaluation (single-source and `--multisource`) |
+| `zero_shot/bench.py`, `summarize.py` | Exp H and I harness / aggregation |
+| `zero_shot/explain.py` | explanation prototype (Phase 1) |
+| `reports/C1..C4_*.md` | detailed per-contribution reports |
+| `results/team/`, `results/ms/` | final tables and raw CSVs |
+| `slides/main.tex`, `slides/main.pdf` | Beamer deck |
+| `TEAM_CONTRIBUTIONS.md` | where each module hooks into the original scripts |
+
+## 12. Next steps (ordered by expected value)
+
+1. **Find out why pooling hurts:** ablate sources one at a time; replace BFS subgraphs by full-graph sparse training; weight
+   sources by size; re-do YelpChi/T-Finance SVD to match the authors' conventions.
+2. **Fix the prototype collinearity** (add a separation/margin loss between normal and abnormal prototypes) - the one
+   defect found independently in three experiments.
+3. **Camouflage-aware corruptions for C3** (rewire towards *similar* nodes) so the pseudo-anomalies look like real fraud.
+4. **Better few-shot objective for C4** (use the abnormal prototype and pseudo-anomalies, early stopping) - the objective, not the
+   adapter, is the bottleneck; then a LoRA rank sweep.
+5. 5 seeds for the multi-source runs.

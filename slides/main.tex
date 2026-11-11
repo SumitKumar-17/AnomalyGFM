@@ -289,8 +289,42 @@ C3 SSL (no labels) & 0.701 & 0.620\\ \bottomrule
 \end{itemize}
 \end{frame}
 
-\begin{frame}{Multi-source pre-training (target domain held out)}
-Results pending (job running on the server).
+\begin{frame}{Multi-source pre-training (target domain held out; 3 seeds)}
+\centering\small
+\begin{tabular}{lccc}
+\toprule
+AUROC & Amazon & Amazon-UPU & Reddit\\ \midrule
+1-source (Facebook) baseline & \textbf{.832} & \textbf{.785} & .572\\
+4-source baseline & \textcolor{bad}{.611} & \textcolor{bad}{.612} & .591\\
+4-source + C1 H2GCN & .548 & .548 & .590\\
+4-source + C2 Hypernet & .620 & .617 & \textcolor{bad}{.467}\\
+4-source + C3 SSL (\emph{no labels}) & .573 & .576 & \textcolor{good}{\textbf{.610}}\\
+4-source C1+C2+C3 & .530 & .508 & .476\\ \bottomrule
+\end{tabular}
+\vspace{4pt}
+\begin{itemize}\footnotesize
+\item Pool: Facebook, Reddit, Amazon, YelpChi, T-Finance minus the target's domain; large graphs as BFS subgraphs ($\le$4,000 nodes).
+\item \textbf{Naive pooling hurt the supervised baseline} on Amazon ($-0.22$) --- negative transfer; Reddit $+0.02$ (noise).
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Reading the multi-source result}
+\begin{columns}[T]
+\column{0.5\textwidth}
+\textbf{What the data support}
+\begin{itemize}\small
+\item \textcolor{good}{C2's inversion disappears} with 4 metadata points ($0.36\to0.62$): supports ``one graph $=$ one metadata point''.
+\item \textcolor{good}{C3} is the best method on Reddit (0.610, label-free) --- suggestive, 3 seeds.
+\item Adaptation again: no-op at paper budget; LoRA/full hurt on Amazon ($\approx0.45$), LoRA most stable on Reddit ($\pm.007$).
+\end{itemize}
+\column{0.5\textwidth}
+\textbf{What we cannot claim}
+\begin{itemize}\small
+\item C2 still only \emph{matches} the degraded baseline and gets worse on Reddit.
+\item Why pooling hurts is \alert{untested}: differing anomaly semantics? BFS-subgraph statistics $\ne$ full graph? our own SVD for Yelp/T-Fin? equal source weights?
+\item It is ``naive pooling \emph{with our sampling}'' that fails --- not multi-source pre-training in general.
+\end{itemize}
+\end{columns}
 \end{frame}
 
 \section{Wrap-up}
@@ -301,7 +335,7 @@ Results pending (job running on the server).
 \item \textbf{Prototype problem:} normal/abnormal prototypes are nearly collinear; the paper's normal score is inverted.
 \item \textbf{C3 is the useful idea:} anomaly structure can be learned with \alert{zero labels}.
 \item \textbf{C4 gives efficiency, not accuracy:} 4,832 params vs 164,002, same accuracy at the paper's budget.
-\item \textbf{C1/C2 do not transfer} from one small training graph --- negative results, reported as such.
+\item \textbf{C1/C2 do not transfer} from one small training graph --- negative results; \textbf{multi-source pooling} removes C2's inversion but hurts the baseline.
 \item \textbf{Released few-shot code is a no-op} (prompt commented out).
 \end{enumerate}
 \end{frame}
