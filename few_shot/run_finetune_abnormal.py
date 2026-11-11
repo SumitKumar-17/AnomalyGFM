@@ -7,7 +7,10 @@ from utils import *
 
 from sklearn.metrics import roc_auc_score
 import random
-import dgl
+try:
+    import dgl
+except ImportError:
+    dgl = None
 from sklearn.metrics import average_precision_score
 import argparse
 from tqdm import tqdm
@@ -56,7 +59,7 @@ print('Dataset Train: ', args.dataset_train)
 print('Dataset Test: ', args.dataset_test)
 
 # Set random seed
-dgl.random.seed(args.seed)
+if dgl is not None: dgl.random.seed(args.seed)
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)

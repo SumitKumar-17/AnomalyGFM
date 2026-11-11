@@ -4,7 +4,10 @@ import scipy.sparse as sp
 import torch
 import scipy.io as sio
 import random
-import dgl
+try:
+    import dgl
+except ImportError:
+    dgl = None
 from collections import Counter
 
 
