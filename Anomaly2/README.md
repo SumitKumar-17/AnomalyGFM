@@ -2,7 +2,7 @@
 
 Four new extensions of the paper's zero-shot model, each with its own experiment, all on **real graphs** (train: Facebook; zero-shot targets:
 Amazon, Amazon-UPU, Reddit, Elliptic; 5 seeds). Everything lives in this folder; the first study is at the repo root (`../WORK.md`).
-Full story, numbers and caveats: **[WORK.md](WORK.md)**. Per-contribution reports: `reports/`.
+Full story, numbers and caveats: **[WORK.md](WORK.md)**. Per-contribution reports: `reports/`. Slides: `slides/main.pdf` (source `slides/main.tex`, 18 pages).
 
 | # | Contribution | Code | Experiment |
 |---|---|---|---|
@@ -27,6 +27,7 @@ Anomaly2/
   models/{core,moe_prototypes,edge_purification,adaptive_residuals}.py
   utils/{data,attacks,unsupervised_tta,viz,experiment}.py
   scripts/{ablation_residuals,benchmark_attacks,diagnose_purifier,select_lr_ext,select_attack_cfg}.py
+  slides/main.{tex,pdf}                Beamer deck (built with pdflatex on the server)
   results/                             final tables/plots; results/round1_lr1e-4_untuned/ = first (flawed) round, kept on purpose
 ```
 
