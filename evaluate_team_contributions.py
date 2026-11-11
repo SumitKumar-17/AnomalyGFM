@@ -49,13 +49,21 @@ p.add_argument('--adapt_lr', type=float, default=1e-3)
 p.add_argument('--adapt_epochs', type=int, default=30)
 p.add_argument('--lora_rank', type=int, default=4)
 p.add_argument('--ssl_weight', type=float, default=1.0, help='weight of SSL loss when combined with supervised loss')
+p.add_argument('--multisource', action='store_true', help='pre-train on several source graphs (target domain excluded)')
+p.add_argument('--pool', nargs='+', default=['train', 'reddit', 'amazon', 'yelp', 'tfinance'])
+p.add_argument('--cap', type=int, default=4000, help='max nodes per sampled source subgraph')
+p.add_argument('--n_views', type=int, default=12)
 p.add_argument('--out', default=f'{ROOT}/results')
 args = p.parse_args()
 dev = torch.device('cuda')
 FILES = {'train': ('Facebook.mat', 'Facebook_svd.mat'),
          'amazon': ('Amazon-all.mat', 'amazon_svd.mat'),
          'amazon_upu': ('Amazon.mat', 'Amazon_upu_svd.mat'),
-         'reddit': ('Reddit.mat', 'reddit_svd.mat')}
+         'reddit': ('Reddit.mat', 'reddit_svd.mat'),
+         'yelp': ('YelpChi.mat', None),            # source-only: no shared SVD file, SVD is computed (paper's recipe)
+         'tfinance': ('t_finance.mat', None)}
+DOMAIN = {'train': 'facebook', 'reddit': 'reddit', 'amazon': 'amazon', 'amazon_upu': 'amazon',
+          'yelp': 'yelp', 'tfinance': 'tfinance'}
 
 
 # ----------------------------------------------------------------------------- data
@@ -72,25 +80,32 @@ def sp_t(m):
     return torch.sparse_coo_tensor(np.vstack([m.row, m.col]), m.data.astype(np.float32), m.shape).coalesce().to(dev)
 
 
-def load_graph(name):
+def load_graph(name, ops=True):
     raw, svd = FILES[name]
-    r, s = sio.loadmat(f'{args.raw_dir}/{raw}'), sio.loadmat(f'{args.svd_dir}/{svd}')
+    r = sio.loadmat(f'{args.raw_dir}/{raw}')
     g = lambda d, ks: next(d[k] for k in ks if k in d)
     adj = sp.csr_matrix(g(r, ['Network', 'A']))
     y = np.asarray(g(r, ['Label', 'gnd'])).ravel().astype(int)
-    ys = np.asarray(g(s, ['Label', 'gnd'])).ravel().astype(int)
-    assert (y == ys).all(), f'{name}: raw/SVD labels differ'
     dense = lambda m: np.asarray(m.todense() if sp.issparse(m) else m, dtype=np.float64)
-    Xraw, Xsvd = dense(g(r, ['Attributes', 'X'])), dense(g(s, ['Attributes', 'X']))
+    Xraw = dense(g(r, ['Attributes', 'X']))
+    if svd is not None:
+        s_ = sio.loadmat(f'{args.svd_dir}/{svd}')
+        assert (y == np.asarray(g(s_, ['Label', 'gnd'])).ravel().astype(int)).all(), f'{name}: raw/SVD labels differ'
+        Xsvd = dense(g(s_, ['Attributes', 'X']))
+    else:                                           # paper's svd_feature_trans.py: U[:, :d] * S[:d]
+        U, S, _ = np.linalg.svd(Xraw, full_matrices=False)
+        Xsvd = U[:, :8] * S[:8]
     N = adj.shape[0]
-    Wn = adj.tolil(); Wn.setdiag(0); Wn = sp.csr_matrix(Wn)
-    rs = np.asarray(Wn.sum(1)).ravel(); rs[rs == 0] = 1
-    A_hat = zs_utils.normalize_adj(adj) + sp.eye(N)
-    A_bin = (adj > 0).astype(np.float32); A_bin.setdiag(0); A_bin.eliminate_zeros()
-    G = dict(name=name, N=N, y=y, A_hat=sp_t(A_hat), Wn=sp_t(sp.diags(1.0 / rs) @ Wn),
-             X8=torch.FloatTensor(rownorm(Xsvd)).to(dev), Xraw=torch.FloatTensor(Xraw).to(dev))
+    A_bin = (adj > 0).astype(np.float32).tolil(); A_bin.setdiag(0); A_bin = sp.csr_matrix(A_bin); A_bin.eliminate_zeros()
+    G = dict(name=name, N=N, y=y, A_bin=A_bin, X8=torch.FloatTensor(rownorm(Xsvd)).to(dev),
+             Xraw=torch.FloatTensor(Xraw).to(dev))
     G['prep'] = make_prep(G['Xraw'], sp_t(A_bin))
-    G['A_dense'] = torch.FloatTensor(np.asarray(A_bin.todense())).to(dev) if N < 3000 else None
+    if ops:
+        Wn = adj.tolil(); Wn.setdiag(0); Wn = sp.csr_matrix(Wn)
+        rs = np.asarray(Wn.sum(1)).ravel(); rs[rs == 0] = 1
+        G['A_hat'] = sp_t(zs_utils.normalize_adj(adj) + sp.eye(N))
+        G['Wn'] = sp_t(sp.diags(1.0 / rs) @ Wn)
+        G['A_dense'] = torch.FloatTensor(np.asarray(A_bin.todense())).to(dev) if N < 3000 else None
     return G
 
 
@@ -213,10 +228,141 @@ def evaluate(net, G, eval_idx, seed, beta=0.5):
 
 
 def timed(fn):
-    torch.cuda.synchronize(); torch.cuda.reset_peak_memory_stats(); t = time.time()
+    """Returns (result, peak GPU MB, seconds). In --multisource mode the peak is INCREMENTAL (peak minus what was
+    already resident, e.g. cached source subgraphs), so rows stay comparable."""
+    torch.cuda.synchronize(); torch.cuda.reset_peak_memory_stats(); base = torch.cuda.memory_allocated(); t = time.time()
     out = fn()
     torch.cuda.synchronize()
-    return out, torch.cuda.max_memory_allocated() / 2 ** 20, time.time() - t
+    peak = torch.cuda.max_memory_allocated() - (base if args.multisource else 0)
+    return out, peak / 2 ** 20, time.time() - t
+
+
+# ----------------------------------------------------------------------------- multi-source pre-training
+def bfs_nodes(adj, cap, rng, fanout=20):
+    """Collect `cap` nodes by BFS from random seeds (keeps local structure; hubs are fan-out limited)."""
+    from collections import deque
+    N = adj.shape[0]; seen = np.zeros(N, bool); order = []
+    while len(order) < cap:
+        st = rng.randint(N)
+        if seen[st]: continue
+        seen[st] = True; q = deque([st])
+        while q and len(order) < cap:
+            u = q.popleft(); order.append(u)
+            nb = adj.indices[adj.indptr[u]:adj.indptr[u + 1]]
+            nb = nb[~seen[nb]]
+            if len(nb) > fanout: nb = rng.choice(nb, fanout, replace=False)
+            seen[nb] = True; q.extend(nb.tolist())
+    return np.array(order[:cap])
+
+
+def make_view(G, idx_np, rng):
+    adj = G['A_bin'][idx_np][:, idx_np].tocsr()
+    N = len(idx_np); it = torch.LongTensor(idx_np).to(dev)
+    Wn = adj.tolil(); Wn.setdiag(0); Wn = sp.csr_matrix(Wn)
+    rs = np.asarray(Wn.sum(1)).ravel(); rs[rs == 0] = 1
+    tr = torch.LongTensor(rng.permutation(N)[:int(0.3 * N)]).to(dev)          # paper: 30% labelled (source graphs only)
+    y = torch.FloatTensor(G['y'][idx_np]).to(dev)
+    return dict(name=G['name'], N=N, A_hat=sp_t(zs_utils.normalize_adj(adj) + sp.eye(N)),
+                Wn=sp_t(sp.diags(1.0 / rs) @ Wn), X8=G['X8'][it], Xraw=G['Xraw'][it], prep=G['prep'],
+                A_dense=torch.FloatTensor(np.asarray(adj.todense())).to(dev), tr_idx=tr, tr_y=y[tr])
+
+
+def make_views(G, seed):
+    rng = np.random.RandomState(10_000 + seed)
+    if G['N'] <= args.cap:
+        return [make_view(G, np.arange(G['N']), rng)]
+    return [make_view(G, bfs_nodes(G['A_bin'], args.cap, rng), rng) for _ in range(args.n_views)]
+
+
+def pretrain_multi(net, srcs, mode, seed):
+    """One optimiser step per epoch on the mean loss over all source graphs (a random view of each)."""
+    opt = torch.optim.Adam([q for q in net.parameters() if q.requires_grad], lr=args.lr)
+    gen = torch.Generator(device=dev).manual_seed(seed)
+    rng = np.random.RandomState(seed + 5); cfg = ssl.SSLConfig()
+    for ep in range(args.epochs):
+        net.train(); opt.zero_grad()
+        nprm, aprm = net.protos(torch.randn(args.hid, device=dev), torch.randn(args.hid, device=dev))
+        total = 0.0
+        for name, views in srcs.items():
+            V = views[rng.randint(len(views))]
+            if 'sup' in mode:
+                emb, res = net.encode(V, V['A_hat'], V['Wn'])
+                idx, y = V['tr_idx'], V['tr_y']
+                total = total + F.binary_cross_entropy_with_logits(net.core.fc1(emb).squeeze(-1)[idx], y)
+                r = res[idx]
+                if (y == 1).any(): total = total + (aprm - r[y == 1]).norm(dim=1).mean()
+                if (y == 0).any(): total = total + 0.1 * (nprm - r[y == 0]).norm(dim=1).mean()
+            if 'ssl' in mode:
+                enc = lambda A_hat, Wn, X, V=V: net.encode(V, A_hat, Wn, X)
+                l, _ = ssl.ssl_loss(enc, V['A_dense'], net.raw_features(V), cfg, gen, nprm, aprm)   # no labels
+                total = total + (args.ssl_weight if 'sup' in mode else 1.0) * l
+        (total / len(srcs)).backward(); opt.step()
+    return net.eval()
+
+
+def main_multi():
+    os.makedirs(args.out, exist_ok=True)
+    print(f'GPU: {torch.cuda.get_device_name(0)}  MULTI-SOURCE pool={args.pool} cap={args.cap} seeds={args.seeds}', flush=True)
+    pool_all = {n: load_graph(n, ops=(n == 'train')) for n in args.pool}
+    Gtr = pool_all['train']
+    rows = []
+    for tgt in args.targets:
+        Gte = load_graph(tgt)
+        srcs_names = [n for n in args.pool if DOMAIN[n] != DOMAIN[tgt]]
+        print(f'\n=== target {tgt} | multi-source pool (target domain excluded): {srcs_names}', flush=True)
+        for seed in args.seeds:
+            rs = np.random.RandomState(1000 + seed)
+            normals = np.where(Gte['y'] == 0)[0]; rs.shuffle(normals)
+            few = torch.LongTensor(normals[:args.k_shot]).to(dev)
+            eval_idx = np.setdiff1d(np.arange(Gte['N']), normals[:args.k_shot])
+            rec = lambda method, stage, m, params, mem, secs: rows.append(
+                dict(target=tgt, seed=seed, method=method, stage=stage, params=params, peak_mb=mem, secs=secs, **m))
+            views = {n: make_views(pool_all[n], seed) for n in srcs_names}
+
+            def fit(label, backbone, align, mode, multi):
+                def go():
+                    seed_all(seed)
+                    net = Net(backbone, align).to(dev)
+                    pretrain_multi(net, views, mode, seed) if multi else pretrain(net, Gtr, mode, seed)
+                    return net, evaluate(net, Gte, eval_idx, seed)
+                (net, m), mem, secs = timed(go)
+                rec(label, 'zero-shot', m, n_params(net.active_modules(with_logit_head='sup' in mode)), mem, secs)
+                return net
+
+            for tag, multi in (('[1-src FB]', False), (f'[{len(srcs_names)}-src]', True)):
+                b = fit(f'{tag} Baseline (GCN+SVD, sup.)', 'gcn', 'svd', 'sup', multi)
+                fit(f'{tag} + C1 H2GCN', 'h2gcn', 'svd', 'sup', multi)
+                fit(f'{tag} + C2 Hypernet align', 'gcn', 'hyper', 'sup', multi)
+                fit(f'{tag} + C3 SSL (NO labels)', 'gcn', 'svd', 'ssl', multi)
+                c = fit(f'{tag} C1+C2+C3 (sup+SSL)', 'h2gcn', 'hyper', 'sup+ssl', multi)
+                if multi:
+                    for label, src, method, ep, lr in [
+                        (f'{tag} Base + prompt tuning (paper protocol)', b, 'prompt', 5, 1e-4),
+                        (f'{tag} Base + C4 Graph-LoRA (paper protocol)', b, 'lora', 5, 1e-4),
+                        (f'{tag} Combined + C4 Graph-LoRA (paper protocol)', c, 'lora', 5, 1e-4),
+                        (f'{tag} [sens.] prompt ({args.adapt_epochs} ep, lr {args.adapt_lr:g})', b, 'prompt', args.adapt_epochs, args.adapt_lr),
+                        (f'{tag} [sens.] full GNN FT ({args.adapt_epochs} ep, lr {args.adapt_lr:g})', b, 'full', args.adapt_epochs, args.adapt_lr),
+                        (f'{tag} [sens.] Graph-LoRA ({args.adapt_epochs} ep, lr {args.adapt_lr:g})', b, 'lora', args.adapt_epochs, args.adapt_lr)]:
+                        def go():
+                            a, n = adapt(src, Gte, few, method, ep, lr, seed)
+                            return n, evaluate(a, Gte, eval_idx, seed)
+                        (n, m), mem, secs = timed(go)
+                        rec(label, f'adapt (k={args.k_shot})', m, n, mem, secs)
+            del views; torch.cuda.empty_cache()
+            print(f'  seed {seed} done', flush=True)
+        del Gte; torch.cuda.empty_cache()
+    df = pd.DataFrame(rows); df.to_csv(f'{args.out}/multisource_raw.csv', index=False)
+    order = list(dict.fromkeys(df.method)); md = []
+    for tgt in args.targets:
+        d = df[df.target == tgt]; g = d.groupby('method', sort=False)
+        t = pd.DataFrame({'Method': order, 'Stage': [d[d.method == m].stage.iloc[0] for m in order],
+            'AUROC': [f'{g.auroc.mean()[m]:.3f}±{g.auroc.std()[m]:.3f}' for m in order],
+            'AUPRC': [f'{g.auprc.mean()[m]:.3f}±{g.auprc.std()[m]:.3f}' for m in order],
+            'Params': [f'{int(g.params.mean()[m]):,}' for m in order],
+            'GPU MB (incr.)': [f'{g.peak_mb.mean()[m]:.0f}' for m in order]})
+        s_ = f'\n### Target: {tgt}  (mean±std over {len(args.seeds)} seeds; target domain never in the source pool)\n' + t.to_markdown(index=False)
+        print(s_); md.append(s_)
+    open(f'{args.out}/multisource.md', 'w').write('\n'.join(md))
 
 
 # ----------------------------------------------------------------------------- main
@@ -294,4 +440,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main_multi() if args.multisource else main()
